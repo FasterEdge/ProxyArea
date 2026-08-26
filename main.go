@@ -19,8 +19,8 @@ import (
 // 纯标准库实现, 免 CGO, 跨平台。
 
 const (
-	version = "1.1.0"
-	rootMsg = "ProxyArea 1.1.0 By tyza66"
+	version = "1.0.20260826"
+	rootMsg = "ProxyArea 1.0.20260826 By tyza66"
 )
 
 var (

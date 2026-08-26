@@ -12,9 +12,8 @@ go.work.sum
 
 # Build artifacts
 /ProxyArea
-/ProxyArea_1.0.0_linux_amd64
-/ProxyArea_1.0.0_linux_arm64
-/ProxyArea_1.0.0_windos_amd64.exe
+/ProxyArea_*
+/proxyarea
 
 # Docker
 *.tar

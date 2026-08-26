@@ -55,7 +55,7 @@ ProxyArea --addr=:8080 --allow-hosts=127.0.0.1,api.internal
 ### 行为细节
 
 - 请求头除 `Connection` `Keep-Alive` `Host` `Content-Length` 等跳变头外全部转发
-- 默认 `User-Agent` 为 `ProxyArea/1.1.0`
+- 默认 `User-Agent` 为 `ProxyArea/1.0.20260826`
 - 响应头原样回传（除跳变头外）
 - 目标主机若不在 `--allow-hosts` 白名单则返回 403
 
@@ -97,9 +97,9 @@ docker run -d --name proxyarea -p 8080:8080 proxyarea --key=my_secret
 
 | 文件 | 平台 |
 |---|---|
-| `ProxyArea_1.0.0_linux_amd64` | Linux x86-64 |
-| `ProxyArea_1.0.0_linux_arm64` | Linux ARM64 |
-| `ProxyArea_1.0.0_windos_amd64.exe` | Windows x86-64（文件名 windos 系拼写遗留） |
+| `ProxyArea_1.0.20260826_linux_amd64` | Linux x86-64 |
+| `ProxyArea_1.0.20260826_linux_arm64` | Linux ARM64 |
+| `ProxyArea_1.0.20260826_windows_amd64.exe` | Windows x86-64 |
 
 ## 自行构建
 
@@ -136,7 +136,7 @@ curl -X DELETE "http://127.0.0.1:8080/proxy?url=http://127.0.0.1:8081/&key=my_se
 
 ## 变更日志
 
-### 1.1.0
+### 1.0.20260826
 
 - **从 gin 迁移到 Go 标准库 `net/http`**，无任何第三方依赖，编译产物从 ~22MB 降至 ~6MB
 - 新增 `--allow-hosts` 目标主机白名单（修复 SSRF 默认无防护问题）

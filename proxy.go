@@ -75,6 +75,7 @@ func NewProxy(cfg Config) (*Proxy, error) {
 
 func (p *Proxy) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// 根路径返回提示信息
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -82,6 +83,7 @@ func (p *Proxy) Handler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = io.WriteString(w, rootMsg)
+	})
 
 	// 健康检查路由
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -145,17 +147,22 @@ func (p *Proxy) Handler() http.Handler {
 		_, _ = io.Copy(clientConn, upstream)
 	})
 
-	// 保持原有的通用 /proxy 路由
+	// 保持原有的通用 /proxy 路由（支持任意方法）
 	mux.HandleFunc("/proxy", p.route(""))
+	// 兼容旧式 /proxy/* 别名（例如 /proxy/get、/proxy/post 等）
+	mux.HandleFunc("/proxy/", func(w http.ResponseWriter, r *http.Request) {
+		aliases := map[string]string{"/proxy/get": http.MethodGet, "/proxy/post": http.MethodPost, "/proxy/put": http.MethodPut, "/proxy/patch": http.MethodPatch, "/proxy/delete": http.MethodDelete, "/proxy/head": http.MethodHead, "/proxy/options": http.MethodOptions}
+		if r.URL.Path == "/proxy/" {
+			p.forward(w, r, r.Method)
+			return
+		}
+		method, ok := aliases[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		p.forward(w, r, method)
 	})
-	mux.HandleFunc("/get", p.route(http.MethodGet))
-	mux.HandleFunc("/post", p.route(http.MethodPost))
-	mux.HandleFunc("/put", p.route(http.MethodPut))
-	mux.HandleFunc("/patch", p.route(http.MethodPatch))
-	mux.HandleFunc("/delete", p.route(http.MethodDelete))
-	mux.HandleFunc("/head", p.route(http.MethodHead))
-	mux.HandleFunc("/options", p.route(http.MethodOptions))
-	mux.HandleFunc("/proxy", p.route(""))
 	return mux
 }
 func (p *Proxy) route(method string) http.HandlerFunc {

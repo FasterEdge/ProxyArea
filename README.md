@@ -1,14 +1,18 @@
-# ProxyArea
+<div align="center">
+  <img src="./Logo.png" alt="logo" width="100" />
+  <h2>ProxyArea</h2>
+  <h3>轻量通用 HTTP 代理转发器</h3>
+</div>
 
 通用 HTTP 代理转发器，将任意 HTTP 请求透明转发到目标服务，支持密钥认证、HTTPS 监听、目标主机白名单与上游超时。
 
 纯 Go 标准库实现，零外部依赖，免 CGO，单文件二进制 < 7MB。
 
-## 仓库
+### 一、仓库
 
 - GitHub: https://github.com/FasterEdge/ProxyArea
 
-## 启动
+### 二、启动
 
 ```bash
 ProxyArea --addr=:8080 --key=my_secret
@@ -16,7 +20,7 @@ ProxyArea --addr=:8080 --key=my_secret
 ProxyArea --addr=:8080 --allow-hosts=127.0.0.1,api.internal
 ```
 
-### 参数
+#### 参数
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
@@ -30,7 +34,7 @@ ProxyArea --addr=:8080 --allow-hosts=127.0.0.1,api.internal
 | `--allow-hosts` | string | `""` | 目标主机白名单（逗号分隔），空表示不限制 |
 | `--insecure-skip-verify` | bool | `false` | 跳过自签名 HTTPS 目标证书校验 |
 
-## 接口
+### 三、接口
 
 所有接口都接受 query 参数 `url`（必填）、`key`、`params`、`https` 与 `https=true` 标记。`/post` 与 `/proxy` 还会原样转发请求 body。
 
@@ -42,7 +46,7 @@ ProxyArea --addr=:8080 --allow-hosts=127.0.0.1,api.internal
 | `Any /proxy` | 任意 | 转发为同方法 |
 | `Any /proxy/...` | 任意 | 转发为同方法 |
 
-### 转发参数
+#### 转发参数
 
 | 字段 | 来源 | 说明 |
 |---|---|---|
@@ -52,23 +56,23 @@ ProxyArea --addr=:8080 --allow-hosts=127.0.0.1,api.internal
 | `https` | query / form | `true` 时目标 URL 使用 `https://` |
 | body | 请求体 | POST/PUT/PATCH/DELETE 时原样转发到目标 |
 
-### 行为细节
+#### 行为细节
 
 - 请求头除 `Connection` `Keep-Alive` `Host` `Content-Length` 等跳变头外全部转发
 - 默认 `User-Agent` 为 `ProxyArea/1.0.20260826`
 - 响应头原样回传（除跳变头外）
 - 目标主机若不在 `--allow-hosts` 白名单则返回 403
 
-## 安全
+### 四、安全
 
 - 未配置 `--key` 时不验证密钥（开发模式，**生产环境必须配置**）
 - `--allow-hosts` 为空时**任意目标 URL 都可访问**（包括内网，存在 SSRF 风险）
 - 部署在公网时务必同时设置 `--key` 与 `--allow-hosts`
 - HTTPS 监听需自备证书，可通过 `--insecure-skip-verify` 跳过上游证书校验
 
-## 与 FasterEdge 生态配合
+### 五、与 FasterEdge 生态配合
 
-### 通过 DontCrack 进程管理器托管
+#### 通过 DontCrack 进程管理器托管
 
 ```bash
 DontCrack \
@@ -82,7 +86,7 @@ DontCrack \
 
 这样可获得自动重启、健康探针、`/healthz` `/metrics` Prometheus 端点。
 
-### 通过 Docker
+#### 通过 Docker
 
 ```bash
 docker build -t proxyarea .
@@ -91,7 +95,7 @@ docker run -d --name proxyarea -p 8080:8080 proxyarea --key=my_secret
 
 多阶段构建会自动为目标平台（amd64 / arm64）生成静态二进制。
 
-## 跨平台预编译二进制
+### 六、跨平台预编译二进制
 
 仓库根目录提供三个平台预编译产物，文件名含版本号与目标：
 
@@ -101,7 +105,7 @@ docker run -d --name proxyarea -p 8080:8080 proxyarea --key=my_secret
 | `ProxyArea_1.0.20260826_linux_arm64` | Linux ARM64 |
 | `ProxyArea_1.0.20260826_windows_amd64.exe` | Windows x86-64 |
 
-## 自行构建
+### 七、自行构建
 
 ```bash
 go build -o proxyarea .
@@ -111,7 +115,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o proxyarea-linux-arm64 .
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o proxyarea.exe .
 ```
 
-## 测试
+### 八、测试
 
 `test_usage.md` 含完整测试用例与配套测试服务器描述。简要示例：
 
@@ -120,13 +124,13 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o proxyarea.exe .
 python3 -m http.server 8081 &
 
 # 起 ProxyArea
-ProxyArea --addr=:8080 --allow-hosts=127.0.0.1 &
+ProxyArea --addr=:8080 --key=my_secret --allow-hosts=127.0.0.1 &
 
 # 转发 GET
 curl "http://127.0.0.1:8080/get?url=http://127.0.0.1:8081/&key=my_secret"
 
 # 转发 POST（body 原样转发）
-curl -X POST "http://127.0.0.1:8080/post?key=my_secret" \
+curl -X POST "http://127.0.0.1:8080/post?url=http://127.0.0.1:8081/&key=my_secret" \
   -H "Content-Type: application/json" \
   -d '{"hello":"world"}'
 
@@ -134,9 +138,9 @@ curl -X POST "http://127.0.0.1:8080/post?key=my_secret" \
 curl -X DELETE "http://127.0.0.1:8080/proxy?url=http://127.0.0.1:8081/&key=my_secret"
 ```
 
-## 变更日志
+### 九、变更日志
 
-### 1.0.20260826
+#### 1.0.20260826
 
 - **从 gin 迁移到 Go 标准库 `net/http`**，无任何第三方依赖，编译产物从 ~22MB 降至 ~6MB
 - 新增 `--allow-hosts` 目标主机白名单（修复 SSRF 默认无防护问题）
@@ -149,6 +153,6 @@ curl -X DELETE "http://127.0.0.1:8080/proxy?url=http://127.0.0.1:8081/&key=my_se
 - 修复文件名 `windos` 拼写（向后兼容保留旧名）
 - 修复 `panic` → `log.Fatal` 在启动时缺证书的场景
 
-### 1.0.0
+#### 1.0.0
 
 - 初版（gin 实现）

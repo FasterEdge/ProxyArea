@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -81,23 +82,80 @@ func (p *Proxy) Handler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = io.WriteString(w, rootMsg)
+
+	// 健康检查路由
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	// 完整的 HTTP 方法路由
+	mux.HandleFunc("/get", p.route(http.MethodGet))
+	mux.HandleFunc("/post", p.route(http.MethodPost))
+	mux.HandleFunc("/put", p.route(http.MethodPut))
+	mux.HandleFunc("/patch", p.route(http.MethodPatch))
+	mux.HandleFunc("/delete", p.route(http.MethodDelete))
+	mux.HandleFunc("/head", p.route(http.MethodHead))
+	mux.HandleFunc("/options", p.route(http.MethodOptions))
+
+	// CONNECT 隧道（用于 HTTPS、WebSocket 等）
+	mux.HandleFunc("/connect", func(w http.ResponseWriter, r *http.Request) {
+		c, err := parseControls(r.Body, r.Header.Get("Content-Type"), r.URL.Query())
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		target, err := buildTargetURL(c, p.cfg.DefaultScheme)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err = p.validateTarget(target); err != nil {
+			writeJSON(w, http.StatusForbidden, err.Error())
+			return
+		}
+
+		// Hijack 客户端连接
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			writeJSON(w, http.StatusInternalServerError, "Hijacking not supported")
+			return
+		}
+		clientConn, _, err := hj.Hijack()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer clientConn.Close()
+
+		// 建立到目标的 TCP 连接
+		dialer := &net.Dialer{Timeout: p.cfg.Timeout}
+		upstream, err := dialer.DialContext(r.Context(), "tcp", target.Host)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		defer upstream.Close()
+
+		// 响应 CONNECT 成功
+		_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+
+		// 双向流量转发
+		go func() { _, _ = io.Copy(upstream, clientConn) }()
+		_, _ = io.Copy(clientConn, upstream)
+	})
+
+	// 保持原有的通用 /proxy 路由
+	mux.HandleFunc("/proxy", p.route(""))
 	})
 	mux.HandleFunc("/get", p.route(http.MethodGet))
 	mux.HandleFunc("/post", p.route(http.MethodPost))
+	mux.HandleFunc("/put", p.route(http.MethodPut))
+	mux.HandleFunc("/patch", p.route(http.MethodPatch))
+	mux.HandleFunc("/delete", p.route(http.MethodDelete))
+	mux.HandleFunc("/head", p.route(http.MethodHead))
+	mux.HandleFunc("/options", p.route(http.MethodOptions))
 	mux.HandleFunc("/proxy", p.route(""))
-	mux.HandleFunc("/proxy/", func(w http.ResponseWriter, r *http.Request) {
-		aliases := map[string]string{"/proxy/get": http.MethodGet, "/proxy/post": http.MethodPost, "/proxy/put": http.MethodPut, "/proxy/patch": http.MethodPatch, "/proxy/delete": http.MethodDelete, "/proxy/head": http.MethodHead, "/proxy/options": http.MethodOptions}
-		if r.URL.Path == "/proxy/" {
-			p.forward(w, r, r.Method)
-			return
-		}
-		method, ok := aliases[r.URL.Path]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		p.forward(w, r, method)
-	})
 	return mux
 }
 func (p *Proxy) route(method string) http.HandlerFunc {

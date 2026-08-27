@@ -16,14 +16,13 @@ ProxyArea --addr=:8080 --key=my_secret --allow-hosts=127.0.0.1,api.internal
 |---|---|
 | `/get` | GET |
 | `/post` | POST |
-| `/proxy`、`/proxy/` | 客户端原方法，包括 PROPFIND 等扩展方法 |
-| `/proxy/get` | GET |
-| `/proxy/post` | POST |
-| `/proxy/put` | PUT |
-| `/proxy/patch` | PATCH |
-| `/proxy/delete` | DELETE |
-| `/proxy/head` | HEAD |
-| `/proxy/options` | OPTIONS |
+| `/put` | PUT |
+| `/patch` | PATCH |
+| `/delete` | DELETE |
+| `/head` | HEAD |
+| `/options` | OPTIONS |
+| `/proxy` | 客户端原方法，包括 PROPFIND 等扩展方法 |
+| `/healthz` | 健康检查（返回 200 OK） |
 
 未知或更深的 `/proxy/...` 返回 404。所有路由、所有方法都会按字节保留业务 body，包括 GET、HEAD、OPTIONS 和 DELETE；没有 body 时不会自动添加 Content-Type。
 

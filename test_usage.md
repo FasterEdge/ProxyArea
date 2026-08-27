@@ -1,100 +1,76 @@
-# 测试服务器使用说明
+# ProxyArea 手工测试
 
-## 服务器信息
-- 端口：8081
-- 地址：http://localhost:8081
+启动上游与代理：
 
-## 测试接口
-
-### 1. GET测试 - 显示查询参数
 ```bash
-# 基本GET请求
-curl "http://localhost:8081/test/get?id=123&name=john&age=25"
-
-# 带中文参数的GET请求
-curl "http://localhost:8081/test/get?name=张三&city=北京"
+go run ./examples/testserver -addr=:8081
+ProxyArea --addr=:8080 --key=my_secret --allow-hosts=127.0.0.1,localhost
 ```
 
-### 2. POST测试 - 显示JSON数据和表单参数
+## 固定与通用路由
+
 ```bash
-# POST JSON数据
-curl -X POST "http://localhost:8081/test/post" \
-  -H "Content-Type: application/json" \
-  -d '{"user": "tyza66", "age": 25, "hobbies": ["coding", "music"]}'
-
-# POST 表单数据
-curl -X POST "http://localhost:8081/test/post" \
-  -d "name=tyza66" \
-  -d "email=test@example.com"
-
-# POST 混合数据（查询参数 + JSON）
-curl -X POST "http://localhost:8081/test/post?source=api&version=1.0" \
-  -H "Content-Type: application/json" \
-  -d '{"message": "hello world"}'
+curl -H 'Authorization: Bearer my_secret' 'http://localhost:8080/get?url=http%3A%2F%2Flocalhost%3A8081%2Ftest%2Fget'
+curl -X POST -H 'X-Proxy-Key: my_secret' 'http://localhost:8080/post?url=http%3A%2F%2Flocalhost%3A8081%2Ftest%2Fpost' -d 'raw body'
+curl -X PROPFIND -H 'X-Proxy-Key: my_secret' 'http://localhost:8080/proxy?url=http%3A%2F%2Flocalhost%3A8081%2Ftest%2Fall' -d 'propfind body'
+curl -X OPTIONS -H 'X-Proxy-Key: my_secret' 'http://localhost:8080/proxy/?url=http%3A%2F%2Flocalhost%3A8081%2Ftest%2Fall' -d 'options body'
 ```
 
-### 3. PUT测试 - 显示JSON数据
+七个方法别名（客户端方法不影响别名指定的上游方法）：
+
 ```bash
-# PUT JSON数据
-curl -X PUT "http://localhost:8081/test/put" \
-  -H "Content-Type: application/json" \
-  -d '{"action": "update", "data": {"id": 1, "name": "updated"}}'
+for alias in get post put patch delete head options; do
+  curl -X GET -H 'X-Proxy-Key: my_secret' \
+    "http://localhost:8080/proxy/$alias?url=http%3A%2F%2Flocalhost%3A8081%2Ftest%2Fall" -d "body-$alias"
+done
 ```
 
-### 4. 通用测试 - 显示所有信息
+`/proxy/nope` 应返回 404。
+
+## JSON、表单、multipart
+
+普通 JSON 是业务 body：
+
 ```bash
-# 任意方法的请求
-curl -X PATCH "http://localhost:8081/test/all?param1=value1" \
-  -H "Content-Type: application/json" \
-  -H "X-Custom-Header: test" \
-  -d '{"test": "data"}'
+curl -X PATCH 'http://localhost:8080/proxy?url=http%3A%2F%2Flocalhost%3A8081%2Ftest%2Fall' \
+  -H 'Authorization: Bearer my_secret' -H 'Content-Type: application/json' -d '{"url":"business-value"}'
 ```
 
-## 代理服务器测试
+表单中的控制字段会被读取，但原始表单仍完整转发：
 
-假设你的代理服务器在8080端口运行，可以这样测试：
-
-### 通过代理访问测试服务器
 ```bash
-# GET请求代理
-curl "http://localhost:8080/proxy/get?url=127.0.0.1%3A8081%2Ftest%2Fget&params=id%3D123%26name%3Djohn"
-
-# POST请求代理
-curl -X GET "http://localhost:8080/proxy/post" \
-  -d "url=127.0.0.1:8081/test/post" \
-  -d "params=source=proxy" \
-  -H "Content-Type: application/json"
+curl -X POST http://localhost:8080/proxy -H 'X-Proxy-Key: my_secret' \
+  -d 'url=http://localhost:8081/test/all' -d 'name=alice'
 ```
 
-## 响应格式示例
+业务 multipart 推荐控制字段放 query/header：
 
-### GET响应示例：
-```json
-{
-  "method": "GET",
-  "timestamp": "2025-09-27 14:30:45",
-  "params": {
-    "id": ["123"],
-    "name": ["john"]
-  },
-  "message": "GET request received successfully",
-  "id": "123",
-  "name": "john"
-}
+```bash
+curl -X POST 'http://localhost:8080/proxy?url=http%3A%2F%2Flocalhost%3A8081%2Ftest%2Fall' \
+  -H 'X-Proxy-Key: my_secret' -F 'file=@README.md' -F 'note=kept'
 ```
 
-### POST响应示例：
-```json
-{
-  "method": "POST",
-  "timestamp": "2025-09-27 14:30:45",
-  "message": "POST request received successfully",
-  "queryParams": {},
-  "formParams": {},
-  "rawBody": "{\"user\": \"tyza66\", \"age\": 25}",
-  "jsonData": {
-    "user": "tyza66",
-    "age": 25
-  }
-}
+## 显式 envelope
+
+```bash
+curl -X POST http://localhost:8080/proxy \
+  -H 'Content-Type: application/vnd.proxyarea.proxy+json' \
+  -H 'Authorization: Bearer my_secret' \
+  -d '{"url":"http://localhost:8081/test/all","encoding":"json","body":{"hello":"world"},"contentType":"application/json"}'
+
+curl -X POST http://localhost:8080/proxy \
+  -H 'Content-Type: application/vnd.proxyarea.proxy+json' -H 'X-Proxy-Key: my_secret' \
+  -d '{"url":"http://localhost:8081/test/all","encoding":"base64","body":"AAH/","contentType":"application/octet-stream"}'
 ```
+
+`encoding` 还支持 `text`（body 为 JSON 字符串）与 `none`（不带 body）。未知字段、非法 base64、额外 JSON 值应返回 400，超过 8 MiB 返回 413。
+
+## 优先级与错误
+
+- `Authorization` 出现时优先于 `X-Proxy-Key` 和其他 key；空值或错误值返回 401，不回退。
+- `X-Proxy-Key` 出现时优先于 query/envelope/form key。
+- query 中出现的控制字段优先于 envelope/form，即使为空。
+- 非白名单主机及重定向到非白名单主机分别返回 403 和 502。
+- 上游连接失败返回 502，超时返回 504。
+
+测试服务器会回显 method、path、query、Header、原始 body 文本与 base64，并提供 `/redirect?to=...`、`/delay?duration=100ms` 和 `/headers` 测试端点。

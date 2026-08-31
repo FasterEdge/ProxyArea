@@ -12,7 +12,7 @@ import (
 
 var addr = flag.String("addr", ":8081", "测试服务器监听地址")
 
-const version = "1.0.20260826"
+const version = "1.0.20260831"
 
 func main() {
 	flag.Parse()

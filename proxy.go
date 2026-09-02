@@ -235,7 +235,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, method string) {
 		clientRequest.Header.Set("Content-Type", c.contentType)
 	}
 	if clientRequest.Header.Get("User-Agent") == "" {
-		clientRequest.Header.Set("User-Agent", "ProxyArea/"+version)
+		clientRequest.Header.Set("User-Agent", "github.com/FasterEdge/ProxyArea/"+version)
 	}
 	start := time.Now()
 	resp, err := p.client.Do(clientRequest)

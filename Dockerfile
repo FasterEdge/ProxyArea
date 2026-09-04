@@ -13,7 +13,8 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/proxyarea .
 
 # ---- Runtime stage ----
-FROM alpine:latest
+# alpine:latest 会随上游漂移导致不可复现构建; 固定 minor 版本。
+FROM alpine:3.21
 
 RUN apk --no-cache add ca-certificates wget && \
     addgroup -g 1001 -S appgroup && \

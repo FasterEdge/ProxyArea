@@ -1,0 +1,9 @@
+# 构建上下文排除项: 避免 .git/凭据/本地产物进入 Docker 构建上下文
+.git
+.gitignore
+*.exe
+*.exe~
+*.log
+.idea/
+.vscode/
+*.md

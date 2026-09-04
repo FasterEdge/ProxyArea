@@ -1,6 +1,6 @@
 # ProxyArea
 
-A lightweight REST-compatible HTTP forwarder implemented with the pure Go standard library. Current version `1.0.20260901`.
+A lightweight REST-compatible HTTP forwarder implemented with the pure Go standard library. Current version `1.0.20260902`.
 
 ## Getting Started
 

@@ -63,7 +63,7 @@ func parseControls(r io.ReadCloser, contentType string, query url.Values) (contr
 		}
 	}
 	mediaType := ""
-	params := map[string]string{}
+	var params map[string]string // 由 mime.ParseMediaType 填充, 无需预分配
 	var err error
 	lowerCT := strings.ToLower(contentType)
 	switch {

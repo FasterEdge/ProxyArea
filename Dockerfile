@@ -1,5 +1,7 @@
 # ---- Build stage ----
 FROM golang:1.24-alpine AS build
+# 通过 goproxy.cn 拉取依赖, 避免在无外网代理环境(如国内网络/受限内网)构建超时
+ENV GOPROXY=https://goproxy.cn,direct
 
 WORKDIR /src
 

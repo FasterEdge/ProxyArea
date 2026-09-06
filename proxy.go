@@ -251,7 +251,9 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, method string) {
 		return
 	}
 	defer resp.Body.Close()
-	log.Printf("[%s] %s -> %d (%s) from %s", method, target.Redacted(), resp.StatusCode, time.Since(start).Round(time.Millisecond), r.RemoteAddr)
+	// 目标 URL 可含换行(如 %0A 解码), 记录前消毒防日志注入
+	red := strings.ReplaceAll(target.Redacted(), "\n", "")
+	log.Printf("[%s] %s -> %d (%s) from %s", method, red, resp.StatusCode, time.Since(start).Round(time.Millisecond), r.RemoteAddr)
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)

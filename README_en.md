@@ -1,8 +1,18 @@
-# ProxyArea
+<div align="center">
+  <img src="./Logo.png" alt="ProxyArea logo" width="100" />
+  <h2>ProxyArea</h2>
+  <h3>A Lightweight, Secure, Pure-Go REST-Compatible HTTP Forwarder</h3>
+</div>
 
-A lightweight REST-compatible HTTP forwarder implemented with the pure Go standard library. Current version `1.0.20260902`.
+### 1. Introduction
 
-## Getting Started
+ProxyArea is a lightweight REST-compatible HTTP forwarder in the FasterEdge ecosystem, implemented with the pure Go standard library. Current version `1.0.20260902`.
+
+- Provides fixed routes `/get`, `/post`, `/put`, `/patch`, `/delete`, `/head`, `/options`, `/proxy`, `/healthz`; all routes and all methods preserve the business body byte-for-byte.
+- Control fields come from query / explicit JSON envelope / form; the auth precedence is `Authorization: Bearer` → `X-Proxy-Key` → query → envelope → form.
+- The allowlist is matched case-insensitively and exactly against `URL.Hostname()`, and is re-validated on every redirect, with a default maximum of 10 hops.
+
+### 2. Getting Started
 
 ```bash
 ProxyArea --addr=:8080 --key=my_secret --allow-hosts=127.0.0.1,api.internal
@@ -10,7 +20,7 @@ ProxyArea --addr=:8080 --key=my_secret --allow-hosts=127.0.0.1,api.internal
 
 The existing CLI stays compatible: `--addr`, `--key`, `--https`, `--cert_file`, `--key_file`, `--timeout`, `--target-scheme`, `--allow-hosts`, `--insecure-skip-verify`.
 
-## Routes
+### 3. Routes
 
 | Path | Upstream Method |
 |---|---|
@@ -26,7 +36,7 @@ The existing CLI stays compatible: `--addr`, `--key`, `--https`, `--cert_file`, 
 
 Unknown or deeper `/proxy/...` paths return 404. All routes and all methods preserve the business body byte-for-byte, including GET, HEAD, OPTIONS and DELETE; no Content-Type is added automatically when there is no body.
 
-## Control Fields
+### 4. Control Fields
 
 `url` is required; `params` is parsed and merged into the target query string (duplicate keys are preserved and encoded only once); `https` accepts boolean values only and takes effect only when the URL has no scheme; `key` is used for compatible authentication.
 
@@ -42,7 +52,7 @@ curl -X PATCH 'http://127.0.0.1:8080/proxy?url=http%3A%2F%2Fapi.internal%2Fitems
 
 urlencoded and multipart can carry `url`, `params`, `https`, `key`, and forward the original form (including control fields) completely. For business forms, it is recommended to put control fields in the query and auth in the Header.
 
-### Explicit JSON Envelope
+#### Explicit JSON Envelope
 
 Media type: `application/vnd.proxyarea.proxy+json`.
 
@@ -60,7 +70,7 @@ Media type: `application/vnd.proxyarea.proxy+json`.
 
 `encoding` supports: `none` (default, must not carry a body), `json`, `text`, `base64`. Unknown fields, extra JSON values, invalid encoding/base64/contentType all return 400; the control body limit is 8 MiB, exceeding it returns 413.
 
-## URL, Headers and Errors
+### 5. URL, Headers and Errors
 
 Only http/https are allowed; userinfo, control characters, missing hostnames and invalid ports are rejected. URLs without a scheme use `https=true` or `--target-scheme`. The allowlist is matched case-insensitively and exactly against `URL.Hostname()`, and is re-validated on every redirect, with a default maximum of 10 hops.
 
@@ -68,11 +78,11 @@ Both requests and responses strip the standard hop-by-hop headers and any header
 
 Error mapping: 400 control/URL errors, 401 auth failure, 403 allowlist rejection, 404 unknown alias, 413 control body too large, 502 upstream or redirect failure, 504 timeout.
 
-## Security
+### 6. Security
 
 When `--key` is not configured, authentication is disabled; when `--allow-hosts` is empty, any target (including private networks) is allowed. Public deployments must configure both, and restrict egress at the deployment layer. `--insecure-skip-verify` is limited to controlled test environments.
 
-## Build and Test
+### 7. Build and Test
 
 ```bash
 go build -o proxyarea .

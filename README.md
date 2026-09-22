@@ -6,7 +6,7 @@
 
 ### 一、项目简介
 
-ProxyArea 是 FasterEdge 生态中的轻量级 REST 兼容 HTTP 转发器,纯 Go 标准库实现,当前版本 `1.0.20260902`。
+ProxyArea 是 FasterEdge 生态中的轻量级 REST 兼容 HTTP 转发器,纯 Go 标准库实现,当前版本 `1.0.20260922`。
 
 - 提供 `/get`、`/post`、`/put`、`/patch`、`/delete`、`/head`、`/options`、`/proxy`、`/healthz` 等固定路由,所有路由、所有方法按字节保留业务 body。
 - 控制字段来源 query / 显式 JSON envelope / form,认证优先级 `Authorization: Bearer` → `X-Proxy-Key` → query → envelope → form。

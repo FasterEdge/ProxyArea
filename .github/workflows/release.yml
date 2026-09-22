@@ -1,0 +1,80 @@
+name: 'Release 打包'
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published, released]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: '构建 ${{ matrix.target }}'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-amd64,   goos: linux,   goarch: amd64, ext: ''   }
+          - { target: linux-arm64,   goos: linux,   goarch: arm64, ext: ''   }
+          - { target: darwin-amd64,  goos: darwin,  goarch: amd64, ext: ''   }
+          - { target: darwin-arm64,  goos: darwin,  goarch: arm64, ext: ''   }
+          - { target: windows-amd64, goos: windows, goarch: amd64, ext: .exe }
+          - { target: windows-arm64, goos: windows, goarch: arm64, ext: .exe }
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.25'
+    - name: '编译 ${{ matrix.target }}'
+      run: |
+        mkdir -p dist
+        CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+          go build -trimpath -ldflags="-s -w" -o dist/proxyarea${{ matrix.ext }} .
+    - name: '打包'
+      run: |
+        cd dist
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          zip -qr ../proxyarea-${{ matrix.target }}.zip proxyarea.exe
+        else
+          tar czf ../proxyarea-${{ matrix.target }}.tar.gz proxyarea
+        fi
+    - uses: actions/upload-artifact@v4
+      with:
+        name: 'proxyarea-${{ matrix.target }}'
+        path: '${{ github.workspace }}/proxyarea-${{ matrix.target }}.*'
+        if-no-files-found: 'error'
+        retention-days: 1
+
+  release:
+    name: '发布 GitHub Release'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        merge-multiple: true
+    - name: '整理产物'
+      run: |
+        mkdir -p release
+        find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
+    - name: '生成 MD5/SHA1 校验文件'
+      run: |
+        set -euo pipefail
+        cd release
+        find . -type f ! -name 'checksums-md5.txt' ! -name 'checksums-sha1.txt' -print0 \
+          | sort -z | xargs -0 -r md5sum > checksums-md5.txt
+        find . -type f ! -name 'checksums-md5.txt' ! -name 'checksums-sha1.txt' -print0 \
+          | sort -z | xargs -0 -r sha1sum > checksums-sha1.txt
+    - name: '上传到 Release'
+      if: github.event_name != 'workflow_dispatch' || github.event.inputs.tag != ''
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
+        files: 'release/*'
+        generate_release_notes: true
+        fail_on_unmatched_files: false

@@ -6,7 +6,7 @@
 
 ### 1. Introduction
 
-ProxyArea is a lightweight REST-compatible HTTP forwarder in the FasterEdge ecosystem, implemented with the pure Go standard library. Current version `1.0.20260902`.
+ProxyArea is a lightweight REST-compatible HTTP forwarder in the FasterEdge ecosystem, implemented with the pure Go standard library. Current version `1.0.20260922`.
 
 - Provides fixed routes `/get`, `/post`, `/put`, `/patch`, `/delete`, `/head`, `/options`, `/proxy`, `/healthz`; all routes and all methods preserve the business body byte-for-byte.
 - Control fields come from query / explicit JSON envelope / form; the auth precedence is `Authorization: Bearer` → `X-Proxy-Key` → query → envelope → form.

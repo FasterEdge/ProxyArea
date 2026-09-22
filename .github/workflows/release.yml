@@ -42,7 +42,7 @@ jobs:
         else
           tar czf ../proxyarea-${{ matrix.target }}.tar.gz proxyarea
         fi
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v7
       with:
         name: 'proxyarea-${{ matrix.target }}'
         path: '${{ github.workspace }}/proxyarea-${{ matrix.target }}.*'

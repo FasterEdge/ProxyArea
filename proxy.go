@@ -112,6 +112,12 @@ func (p *Proxy) Handler() http.Handler {
 			writeJSON(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		// 认证绕过修复: 旧实现 /connect 跳过 key 校验, 配置 --key 后仍可免鉴权
+		// 建立内网 TCP 隧道; 现与 forward 一致校验凭据。
+		if !p.authorize(r, c) {
+			writeJSON(w, http.StatusUnauthorized, "invalid key")
+			return
+		}
 		target, err := buildTargetURL(c, p.cfg.DefaultScheme)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, err.Error())
@@ -180,15 +186,12 @@ func (p *Proxy) route(method string) http.HandlerFunc {
 	}
 }
 
-func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, method string) {
-	c, err := parseControls(r.Body, r.Header.Get("Content-Type"), r.URL.Query())
-	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, errBodyTooLarge) {
-			status = http.StatusRequestEntityTooLarge
-		}
-		writeJSON(w, status, err.Error())
-		return
+// authorize 校验请求凭据(c.key 或 Authorization/X-Proxy-Key 头)。
+// 未配置 Key 时放行; 配置时用常数时间比较。旧实现仅 forward 校验, /connect
+// 隧道端点完全跳过认证 → 配置 --key 后仍可免鉴权建立内网 TCP 隧道(认证绕过)。
+func (p *Proxy) authorize(r *http.Request, c controls) bool {
+	if p.cfg.Key == "" {
+		return true
 	}
 	credential := c.key
 	if vals, ok := r.Header["Authorization"]; ok {
@@ -202,7 +205,20 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, method string) {
 			credential.text = vals[0]
 		}
 	}
-	if p.cfg.Key != "" && (!credential.present || subtle.ConstantTimeCompare([]byte(credential.text), []byte(p.cfg.Key)) != 1) {
+	return credential.present && subtle.ConstantTimeCompare([]byte(credential.text), []byte(p.cfg.Key)) == 1
+}
+
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, method string) {
+	c, err := parseControls(r.Body, r.Header.Get("Content-Type"), r.URL.Query())
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, err.Error())
+		return
+	}
+	if !p.authorize(r, c) {
 		writeJSON(w, http.StatusUnauthorized, "invalid key")
 		return
 	}
@@ -228,6 +244,14 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, method string) {
 		return
 	}
 	copyRequestHeaders(clientRequest.Header, r.Header)
+	// 来源 IP 防伪造: 删除客户端可控的转发头, 改写为真实对端地址, 避免
+	// 上游基于 X-Forwarded-For/Forwarded/X-Real-IP 的鉴权被伪造来源绕过。
+	clientRequest.Header.Del("X-Forwarded-For")
+	clientRequest.Header.Del("Forwarded")
+	clientRequest.Header.Del("X-Real-IP")
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
+		clientRequest.Header.Set("X-Forwarded-For", host)
+	}
 	if c.replacedBody {
 		clientRequest.Header.Del("Content-Encoding")
 	}
@@ -266,12 +290,27 @@ func (p *Proxy) validateTarget(u *url.URL) error {
 	if len(p.cfg.AllowHosts) == 0 {
 		return nil
 	}
+	// hostPort 保留端口信息; 无端口时仅主机名。
+	hostPort := u.Host
+	if u.Port() == "" {
+		hostPort = u.Hostname()
+	}
 	for _, h := range p.cfg.AllowHosts {
-		if strings.EqualFold(strings.TrimSpace(h), u.Hostname()) {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		// 白名单条目支持两种形式: "host"(仅主机名, 不限制端口) 与
+		// "host:port"(精确匹配主机+端口, 防止 /connect 对白名单主机做任意端口扫描)。
+		if strings.Contains(h, ":") {
+			if strings.EqualFold(h, hostPort) {
+				return nil
+			}
+		} else if strings.EqualFold(h, u.Hostname()) {
 			return nil
 		}
 	}
-	return errors.New("目标主机不在白名单内: " + u.Hostname())
+	return errors.New("目标主机不在白名单内: " + u.Host)
 }
 
 var hopByHop = map[string]bool{"Connection": true, "Keep-Alive": true, "Proxy-Authenticate": true, "Proxy-Authorization": true, "Te": true, "Trailer": true, "Transfer-Encoding": true, "Upgrade": true, "Host": true, "Content-Length": true}

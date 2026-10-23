@@ -86,7 +86,9 @@ func TestRoutesAndBodyPreservation(t *testing.T) {
 	p, _ := NewProxy(Config{})
 	proxy := httptest.NewServer(p.Handler())
 	defer proxy.Close()
-	if resp := do(t, "GET", proxy.URL+"/proxy/nope?url=x", nil, nil); resp.StatusCode != 404 {
+	resp := do(t, "GET", proxy.URL+"/proxy/nope?url=x", nil, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != 404 {
 		t.Fatalf("unknown=%d", resp.StatusCode)
 	}
 }

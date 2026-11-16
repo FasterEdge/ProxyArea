@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	version = "1.0.20261022"
-	rootMsg = "ProxyArea 1.0.20261022 By tyza66"
+	version = "1.0.20261116"
+	rootMsg = "ProxyArea 1.0.20261116 By tyza66"
 )
 
 func main() {

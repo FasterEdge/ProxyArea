@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	version = "1.0.20261116"
-	rootMsg = "ProxyArea 1.0.20261116 By tyza66"
+	version = "1.0.20261123"
+	rootMsg = "ProxyArea 1.0.20261123 By tyza66"
 )
 
 // byteSizeFlag 让上限类参数既接受纯数字(字节), 也接受 "16MiB"、"64MB"、"1024" 这类写法。

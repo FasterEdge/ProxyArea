@@ -43,6 +43,37 @@ func TestClassifyIPBlocksReservedRanges(t *testing.T) {
 		{"0.0.0.0", ipUnspecified},
 		{"::", ipUnspecified},
 		{"224.0.0.1", ipMulticast},
+		// 保留段 240.0.0.0/4(含受限广播 255.255.255.255)
+		{"240.0.0.1", ipReserved},
+		{"255.255.255.255", ipReserved},
+		{"255.255.255.254", ipReserved},
+		{"239.255.255.255", ipMulticast},
+		// 基准测试 198.18.0.0/15
+		{"198.18.0.1", ipReserved},
+		{"198.19.255.255", ipReserved},
+		{"198.17.255.255", ipPublic},
+		{"198.20.0.1", ipPublic},
+		// 文档段 TEST-NET-1/2/3
+		{"192.0.2.1", ipReserved},
+		{"198.51.100.1", ipReserved},
+		{"203.0.113.10", ipReserved},
+		{"192.0.1.1", ipPublic},
+		{"192.0.2.0", ipReserved},
+		{"192.0.0.1", ipPublic},
+		{"203.0.113.255", ipReserved},
+		{"192.0.2.1", ipReserved},
+		{"198.51.100.1", ipReserved},
+		{"203.0.113.10", ipReserved},
+		// 其它标准库不判定的非公网段
+		{"100::1", ipReserved}, // 丢弃段 100::/64
+		{"2001:db8::1", ipReserved},
+		{"2001:db9::1", ipPublic}, // 紧邻文档段之外, 确认没有一刀切
+		{"3fff::1", ipReserved},
+		{"2001:2::1", ipReserved},
+		{"64:ff9b::7f00:1", ipReserved}, // NAT64 内嵌 127.0.0.1
+		{"64:ff9b:1::7f00:1", ipReserved},
+		{"2002:7f00:1::", ipReserved},   // 6to4 内嵌 127.0.0.1
+		{"2001:0:7f00:1::", ipReserved}, // Teredo 内嵌 127.0.0.1
 	}
 	for _, tc := range cases {
 		ip := net.ParseIP(tc.ip)
@@ -67,6 +98,12 @@ func TestClassifyIPNormalizesIPv4Mapped(t *testing.T) {
 		{"::ffff:169.254.169.254", ipLinkLocal},
 		{"::ffff:100.64.0.1", ipPrivate},
 		{"::ffff:8.8.8.8", ipPublic},
+		{"::ffff:240.0.0.1", ipReserved},
+		{"::ffff:198.18.0.1", ipReserved},
+		{"::ffff:192.0.2.1", ipReserved},
+		{"::ffff:198.51.100.1", ipReserved},
+		{"::ffff:203.0.113.10", ipReserved},
+		{"::ffff:255.255.255.255", ipReserved},
 	} {
 		ip := net.ParseIP(tc.ip)
 		if ip == nil {
@@ -111,11 +148,32 @@ func TestPrivateTargetRejectedOnAllPaths(t *testing.T) {
 		{"ipv4-mapped-v6", "http://[::ffff:10.0.0.1]:8080", nil},
 		{"unspecified", "http://0.0.0.0:8080", nil},
 		{"multicast", "http://224.0.0.1:8080", nil},
+		// 保留段/基准测试段/受限广播: 标准库不判定, 过去会当公网放行
+		{"reserved-240", "http://240.0.0.1:8080", nil},
+		{"reserved-benchmark", "http://198.18.0.1:8080", nil},
+		{"reserved-testnet1", "http://192.0.2.1:8080", nil},
+		{"reserved-testnet2", "http://198.51.100.1:8080", nil},
+		{"reserved-testnet3", "http://203.0.113.1:8080", nil},
+		{"reserved-broadcast", "http://255.255.255.255:8080", nil},
+		{"reserved-ipv6-doc", "http://[2001:db8::1]:8080", nil},
+		{"reserved-ipv6-discard", "http://[100::1]:8080", nil},
+		// IPv4-mapped IPv6 写法绕过保留段判定
+		{"reserved-mapped-240", "http://[::ffff:240.0.0.1]:8080", nil},
+		{"reserved-mapped-testnet1", "http://[::ffff:192.0.2.1]:8080", nil},
+		// NAT64/6to4/Teredo 内嵌回环 IPv4
+		{"reserved-nat64-loopback", "http://[64:ff9b::7f00:1]:8080", nil},
+		{"reserved-6to4-loopback", "http://[2002:7f00:1::]:8080", nil},
+		{"reserved-teredo-loopback", "http://[2001:0:7f00:1::]:8080", nil},
 		// 主机名白名单放行, 但解析结果指向内网(DNS rebinding 的经典形态)
 		{"rebind-host-to-loopback", "http://evil.example.com:8080", stubResolver(t, "127.0.0.1")},
 		{"rebind-host-to-metadata", "http://evil.example.com:8080", stubResolver(t, "169.254.169.254")},
 		{"rebind-host-to-private", "http://evil.example.com:8080", stubResolver(t, "10.1.2.3")},
 		{"rebind-host-to-mapped-v6", "http://evil.example.com:8080", stubResolver(t, "::ffff:192.168.0.1")},
+		// 白名单主机名解析到保留段
+		{"rebind-host-to-reserved-240", "http://evil.example.com:8080", stubResolver(t, "240.0.0.1")},
+		{"rebind-host-to-testnet1", "http://evil.example.com:8080", stubResolver(t, "192.0.2.1")},
+		{"rebind-host-to-benchmark", "http://evil.example.com:8080", stubResolver(t, "198.18.0.1")},
+		{"rebind-host-to-mapped-reserved", "http://evil.example.com:8080", stubResolver(t, "::ffff:240.0.0.1")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -228,8 +286,19 @@ func TestRedirectHopRechecksResolvedIP(t *testing.T) {
 		// 白名单主机名解析到内网: 逐跳重新校验必须拒绝
 		{"allowlisted-but-private", "http://rebound.example.test/x", stubResolver(t, "127.0.0.1"), true},
 		{"allowlisted-but-metadata", "http://rebound.example.test/x", stubResolver(t, "169.254.169.254"), true},
-		// 公网地址应放行, 确认校验没有一刀切
-		{"public-ok", "http://203.0.113.10/x", nil, false},
+		// 公网地址应放行, 确认校验没有一刀切。
+		// 注意不能用 203.0.113.10: 那是 TEST-NET-3 文档段, 已被归为保留段拒绝。
+		{"public-ok", "http://1.1.1.1/x", nil, false},
+		// 保留段/基准测试段/文档段/受限广播在重定向逐跳校验里同样必须被拒
+		{"reserved-240", "http://240.0.0.1/x", nil, true},
+		{"reserved-benchmark", "http://198.18.0.1/x", nil, true},
+		{"reserved-testnet1", "http://192.0.2.1/x", nil, true},
+		{"reserved-testnet2", "http://198.51.100.1/x", nil, true},
+		{"reserved-testnet3", "http://203.0.113.10/x", nil, true},
+		{"reserved-broadcast", "http://255.255.255.255/x", nil, true},
+		{"reserved-ipv6-doc", "http://[2001:db8::1]/x", nil, true},
+		{"reserved-mapped-240", "http://[::ffff:240.0.0.1]/x", nil, true},
+		{"allowlisted-but-reserved", "http://rebound.example.test/x", stubResolver(t, "240.0.0.1"), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -360,7 +429,15 @@ func TestDialGuardedRejectsReservedAddresses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, addr := range []string{"127.0.0.1:80", "10.0.0.1:80", "169.254.169.254:80", "[::ffff:192.168.0.1]:80", "0.0.0.0:80", "[::1]:80"} {
+	for _, addr := range []string{
+		"127.0.0.1:80", "10.0.0.1:80", "169.254.169.254:80", "[::ffff:192.168.0.1]:80",
+		"0.0.0.0:80", "[::1]:80",
+		// 保留段/基准测试段/文档段/受限广播: 拨号阶段同样恒拒
+		"240.0.0.1:80", "198.18.0.1:80", "192.0.2.1:80", "198.51.100.1:80",
+		"203.0.113.10:80", "255.255.255.255:80",
+		"[::ffff:240.0.0.1]:80", "[2001:db8::1]:80", "[100::1]:80",
+		"[64:ff9b::7f00:1]:80", "[2002:7f00:1::]:80", "[2001:0:7f00:1::]:80",
+	} {
 		conn, err := p.dialGuarded(context.Background(), "tcp", addr)
 		if err == nil {
 			conn.Close()
@@ -368,6 +445,32 @@ func TestDialGuardedRejectsReservedAddresses(t *testing.T) {
 		}
 		if !errors.Is(err, errTargetDenied) {
 			t.Fatalf("dial %s: err=%v, want errTargetDenied", addr, err)
+		}
+	}
+}
+
+// --allow-private-nets 只能放行回环/私网/链路本地; 组播、未指定地址与保留段
+// (240.0.0.0/4、198.18.0.0/15、TEST-NET-1/2/3、255.255.255.255)恒被拒绝,
+// 否则该开关会把整个转发器变成任意地址打洞器。
+func TestAllowPrivateNetsDoesNotOpenReservedRanges(t *testing.T) {
+	p, err := NewProxy(Config{AllowPrivateNets: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied := []string{
+		"240.0.0.1", "255.255.255.255", "198.18.0.1", "192.0.2.1",
+		"198.51.100.1", "203.0.113.10", "224.0.0.1", "0.0.0.0",
+		"::ffff:240.0.0.1", "2001:db8::1", "100::1", "64:ff9b::7f00:1",
+	}
+	for _, s := range denied {
+		if err := p.checkResolvedIPs("x", []net.IP{net.ParseIP(s)}); !errors.Is(err, errTargetDenied) {
+			t.Errorf("AllowPrivateNets=true 放行了 %s: err=%v", s, err)
+		}
+	}
+	allowed := []string{"127.0.0.1", "::1", "10.0.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1"}
+	for _, s := range allowed {
+		if err := p.checkResolvedIPs("x", []net.IP{net.ParseIP(s)}); err != nil {
+			t.Errorf("AllowPrivateNets=true 拒绝了 %s: %v", s, err)
 		}
 	}
 }

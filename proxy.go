@@ -29,7 +29,24 @@ type Config struct {
 	Transport          http.RoundTripper
 	MaxRedirects       int
 	DisableRedirects   bool
+
+	// MaxRequestBody 是非控制类(透传)请求体上限, 默认 DefaultMaxRequestBody。
+	// 控制类请求体另有 maxControlBody 上限, 两者取小者生效。
+	MaxRequestBody int64
+	// MaxResponseBody 是上游响应体上限, 默认 DefaultMaxResponseBody。
+	MaxResponseBody int64
+	// AllowPrivateNets 放行回环/私网/链路本地地址, 仅供受控内网与测试使用。
+	AllowPrivateNets bool
+	// LookupIP 替换默认解析器, 用于测试注入(例如模拟 DNS rebinding)。
+	LookupIP func(ctx context.Context, host string) ([]net.IP, error)
 }
+
+const (
+	// DefaultMaxRequestBody 16 MiB: 覆盖常规 JSON/表单业务体, 同时挡住无限流式上传。
+	DefaultMaxRequestBody int64 = 16 << 20
+	// DefaultMaxResponseBody 64 MiB: 兼顾大文件下载与内存/带宽可预期性。
+	DefaultMaxResponseBody int64 = 64 << 20
+)
 
 type Proxy struct {
 	cfg    Config
@@ -52,10 +69,25 @@ func NewProxy(cfg Config) (*Proxy, error) {
 	if cfg.RequireAllowlist && len(cfg.AllowHosts) == 0 {
 		return nil, errors.New("allow-hosts is required when safe allowlist mode is enabled")
 	}
+	if cfg.MaxRequestBody <= 0 {
+		cfg.MaxRequestBody = DefaultMaxRequestBody
+	}
+	if cfg.MaxResponseBody <= 0 {
+		cfg.MaxResponseBody = DefaultMaxResponseBody
+	}
 	if cfg.Transport == nil {
 		cfg.Transport = http.DefaultTransport
 	}
 	p := &Proxy{cfg: cfg}
+	// 在传输层装上"解析→校验→按校验结果拨号"的钩子, 关闭 DNS rebinding 的
+	// TOCTOU 窗口。必须克隆 *http.Transport: 直接改传入的 Transport(常见是
+	// http.DefaultTransport)会污染进程全局状态。
+	if base, ok := cfg.Transport.(*http.Transport); ok {
+		tr := base.Clone()
+		tr.DialContext = p.dialGuarded
+		cfg.Transport = tr
+		p.cfg.Transport = tr
+	}
 	p.client = &http.Client{Timeout: cfg.Timeout, Transport: cfg.Transport}
 	p.client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if cfg.DisableRedirects {
@@ -68,7 +100,9 @@ func NewProxy(cfg Config) (*Proxy, error) {
 		if len(via) >= limit {
 			return errors.New("too many redirects")
 		}
-		if err := p.validateTarget(req.URL); err != nil {
+		if _, err := p.validateTarget(req.Context(), req.URL); err != nil {
+			// 错误会经 client.Do 冒泡到 forward, 按既有文档映射为 502
+			//(「上游或重定向失败」), 与原有的重定向白名单拒绝行为保持一致。
 			return err
 		}
 		req.Header.Del("Authorization")
@@ -123,8 +157,8 @@ func (p *Proxy) Handler() http.Handler {
 			writeJSON(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err = p.validateTarget(target); err != nil {
-			writeJSON(w, http.StatusForbidden, err.Error())
+		if _, err = p.validateTarget(r.Context(), target); err != nil {
+			writeJSON(w, statusForTargetError(err), err.Error())
 			return
 		}
 
@@ -141,11 +175,11 @@ func (p *Proxy) Handler() http.Handler {
 		}
 		defer clientConn.Close()
 
-		// 建立到目标的 TCP 连接
-		dialer := &net.Dialer{Timeout: p.cfg.Timeout}
-		upstream, err := dialer.DialContext(r.Context(), "tcp", target.Host)
+		// 建立到目标的 TCP 连接: 复用 dialGuarded, 按已校验的 IP 拨号,
+		// 与 forward/重定向共用同一份校验实现。
+		upstream, err := p.dialGuarded(r.Context(), "tcp", target.Host)
 		if err != nil {
-			writeJSON(w, http.StatusBadGateway, err.Error())
+			writeJSON(w, statusForTargetError(err), err.Error())
 			return
 		}
 		defer upstream.Close()
@@ -227,13 +261,20 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, method string) {
 		writeJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err = p.validateTarget(target); err != nil {
-		writeJSON(w, http.StatusForbidden, err.Error())
+	if _, err = p.validateTarget(r.Context(), target); err != nil {
+		writeJSON(w, statusForTargetError(err), err.Error())
+		return
+	}
+	// 透传路径的请求体上限: Content-Length 已知时直接拒绝, 未知(chunked)时
+	// 边读边计数, 超限中断并返回 413。控制类 body 已在 parseControls 内被
+	// maxControlBody 截断, 这里统一再包一层, 实际取两者较小值。
+	if r.ContentLength > p.cfg.MaxRequestBody {
+		writeJSON(w, http.StatusRequestEntityTooLarge, "请求体超过上限")
 		return
 	}
 	var body io.Reader
 	if c.body != nil {
-		body = c.body
+		body = &cappedReader{r: c.body, remaining: p.cfg.MaxRequestBody}
 	}
 	if c.body != nil {
 		defer c.body.Close()
@@ -268,7 +309,9 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, method string) {
 			return
 		}
 		status := http.StatusBadGateway
-		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		if errors.Is(err, errBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		} else if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
 			status = http.StatusGatewayTimeout
 		}
 		writeJSON(w, status, "上游请求失败: "+err.Error())
@@ -278,15 +321,36 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, method string) {
 	// 目标 URL 可含换行(如 %0A 解码), 记录前消毒防日志注入
 	red := strings.ReplaceAll(target.Redacted(), "\n", "")
 	log.Printf("[%s] %s -> %d (%s) from %s", method, red, resp.StatusCode, time.Since(start).Round(time.Millisecond), r.RemoteAddr)
+	// 响应体上限(已知长度): 在写响应头之前就拒绝, 客户端拿到明确的 502,
+	// 而不是被截断的半截 body。未知长度(chunked)由 writeResponseBody 兜。
+	if p.cfg.MaxResponseBody > 0 && resp.ContentLength > p.cfg.MaxResponseBody {
+		writeJSON(w, http.StatusBadGateway, "上游响应体超过上限")
+		return
+	}
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	if err := p.writeResponseBody(w, resp.Body); err != nil {
+		// 响应头已发出, 无法再改状态码; 中断连接, 让客户端看到传输失败,
+		// 而不是把截断后的 body 当成完整响应。
+		log.Printf("响应体转发中断(上限 %d): %v", p.cfg.MaxResponseBody, err)
+		abortStream()
+	}
 }
 
-func (p *Proxy) validateTarget(u *url.URL) error {
+func (p *Proxy) validateTarget(ctx context.Context, u *url.URL) ([]net.IP, error) {
 	if u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-		return errors.New("目标 URL 非法")
+		return nil, errors.New("目标 URL 非法")
 	}
+	if err := p.checkAllowHost(u); err != nil {
+		return nil, err
+	}
+	// 以上都是字面量匹配, 只能挡住"写死的内网地址"; 真正的边界是下面的
+	// 解析后 IP 校验, DNS rebinding 与 CNAME 指向内网都靠它兜住。
+	return p.resolveChecked(ctx, u.Hostname())
+}
+
+// checkAllowHost 只做主机名/端口的字面量白名单匹配; 空列表表示不限制主机名。
+func (p *Proxy) checkAllowHost(u *url.URL) error {
 	if len(p.cfg.AllowHosts) == 0 {
 		return nil
 	}

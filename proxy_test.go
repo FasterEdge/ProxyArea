@@ -23,6 +23,21 @@ type seenRequest struct {
 	URL                       *url.URL
 }
 
+// localLoopback 放行回环地址。本地/集成测试的上游由 httptest.NewServer 提供,
+// 一律监听 127.0.0.1; 没有这个开关, 解析后 IP 校验会按公网部署策略拒绝它们。
+// 真实公网部署不要开启 —— 那是 --allow-private-nets 的含义。
+const localLoopback = true
+
+// localConfig 返回一个按测试场景定制的 Config: 按测试需要的字段逐个赋值,
+// 而不是为每个子测试复制一份完整结构体。
+func localConfig(extra func(*Config)) Config {
+	cfg := Config{AllowPrivateNets: localLoopback}
+	if extra != nil {
+		extra(&cfg)
+	}
+	return cfg
+}
+
 func testProxy(t *testing.T, cfg Config) (*httptest.Server, <-chan seenRequest) {
 	t.Helper()
 	seen := make(chan seenRequest, 20)
@@ -36,6 +51,7 @@ func testProxy(t *testing.T, cfg Config) (*httptest.Server, <-chan seenRequest) 
 	}))
 	t.Cleanup(up.Close)
 	cfg.Transport = http.DefaultTransport
+	cfg.AllowPrivateNets = true
 	p, err := NewProxy(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +89,7 @@ func TestRoutesAndBodyPreservation(t *testing.T) {
 				}
 			}))
 			defer up.Close()
-			p, _ := NewProxy(Config{})
+			p, _ := NewProxy(localConfig(nil))
 			proxy := httptest.NewServer(p.Handler())
 			defer proxy.Close()
 			resp := do(t, "PROPFIND", proxy.URL+path+"?url="+url.QueryEscape(up.URL), bytes.NewReader([]byte{0, 1, 2, 255}), map[string]string{"Content-Type": "application/octet-stream"})
@@ -83,7 +99,7 @@ func TestRoutesAndBodyPreservation(t *testing.T) {
 			}
 		})
 	}
-	p, _ := NewProxy(Config{})
+	p, _ := NewProxy(localConfig(nil))
 	proxy := httptest.NewServer(p.Handler())
 	defer proxy.Close()
 	resp := do(t, "GET", proxy.URL+"/proxy/nope?url=x", nil, nil)
@@ -99,7 +115,7 @@ func TestControlSourcesAndAuthentication(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "%s|%s", r.URL.Query().Get("x"), b)
 	}))
 	defer up.Close()
-	p, _ := NewProxy(Config{Key: "secret"})
+	p, _ := NewProxy(localConfig(func(c *Config) { c.Key = "secret" }))
 	proxy := httptest.NewServer(p.Handler())
 	defer proxy.Close()
 	cases := []struct {
@@ -137,7 +153,7 @@ func TestFormMultipartAndEnvelope(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "%s|%s", r.Header.Get("Content-Type"), b)
 	}))
 	defer up.Close()
-	p, _ := NewProxy(Config{})
+	p, _ := NewProxy(localConfig(nil))
 	proxy := httptest.NewServer(p.Handler())
 	defer proxy.Close()
 	form := "url=" + url.QueryEscape(up.URL) + "&name=alice"
@@ -216,7 +232,7 @@ func TestHeadersAllowlistRedirectAndErrors(t *testing.T) {
 	}))
 	defer up.Close()
 	host := strings.Split(strings.TrimPrefix(up.URL, "http://"), ":")[0]
-	p, _ := NewProxy(Config{Key: "s", AllowHosts: []string{strings.ToUpper(host)}})
+	p, _ := NewProxy(localConfig(func(c *Config) { c.Key = "s"; c.AllowHosts = []string{strings.ToUpper(host)} }))
 	proxy := httptest.NewServer(p.Handler())
 	defer proxy.Close()
 	resp := do(t, "GET", proxy.URL+"/proxy?url="+url.QueryEscape(up.URL), nil, map[string]string{"Authorization": "Bearer s", "Connection": "X-Secret", "X-Secret": "bad", "X-End": "ok"})
@@ -234,7 +250,7 @@ func TestHeadersAllowlistRedirectAndErrors(t *testing.T) {
 	redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, redirectTarget, http.StatusFound) }))
 	defer redir.Close()
 	allowedURL, _ := url.Parse(redir.URL)
-	p2, _ := NewProxy(Config{AllowHosts: []string{allowedURL.Hostname()}})
+	p2, _ := NewProxy(localConfig(func(c *Config) { c.AllowHosts = []string{allowedURL.Hostname()} }))
 	ps := httptest.NewServer(p2.Handler())
 	defer ps.Close()
 	resp = do(t, "GET", ps.URL+"/proxy?url="+url.QueryEscape(redir.URL), nil, nil)
@@ -242,7 +258,7 @@ func TestHeadersAllowlistRedirectAndErrors(t *testing.T) {
 		t.Fatalf("redirect status=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
-	p3, _ := NewProxy(Config{Timeout: 10 * time.Millisecond})
+	p3, _ := NewProxy(localConfig(func(c *Config) { c.Timeout = 10 * time.Millisecond }))
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { time.Sleep(50 * time.Millisecond) }))
 	defer slow.Close()
 	px := httptest.NewServer(p3.Handler())
@@ -265,7 +281,7 @@ func TestLargeOrdinaryBodyStreamsWithoutTruncation(t *testing.T) {
 		_, _ = fmt.Fprint(w, n)
 	}))
 	defer up.Close()
-	p, _ := NewProxy(Config{})
+	p, _ := NewProxy(localConfig(nil))
 	s := httptest.NewServer(p.Handler())
 	defer s.Close()
 	resp := do(t, "POST", s.URL+"/proxy?url="+url.QueryEscape(up.URL), strings.NewReader(strings.Repeat("x", want)), map[string]string{"Content-Type": "application/octet-stream"})
@@ -279,7 +295,7 @@ func TestLargeOrdinaryBodyStreamsWithoutTruncation(t *testing.T) {
 func TestGenericRouteConcurrentMethods(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, r.Method) }))
 	defer up.Close()
-	p, _ := NewProxy(Config{})
+	p, _ := NewProxy(localConfig(nil))
 	s := httptest.NewServer(p.Handler())
 	defer s.Close()
 	methods := []string{"GET", "POST", "PATCH", "DELETE", "PROPFIND"}
@@ -327,7 +343,7 @@ func TestEnvelopeSanitizationAndResponseCredentials(t *testing.T) {
 		w.Header().Set("X-Proxy-Key", "response-key")
 	}))
 	defer up.Close()
-	p, _ := NewProxy(Config{})
+	p, _ := NewProxy(localConfig(nil))
 	s := httptest.NewServer(p.Handler())
 	defer s.Close()
 	env := fmt.Sprintf(`{"url":%q,"encoding":"text","body":"hello"}`, up.URL)
@@ -358,7 +374,7 @@ func TestRedirectPolicyAndAllowlistSafety(t *testing.T) {
 		want int
 	}{{"default-follows", Config{}, 200}, {"disabled", Config{DisableRedirects: true}, 302}} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, _ := NewProxy(tc.cfg)
+			p, _ := NewProxy(localConfig(func(c *Config) { *c = tc.cfg; c.AllowPrivateNets = true }))
 			s := httptest.NewServer(p.Handler())
 			defer s.Close()
 			client := http.DefaultClient
@@ -388,7 +404,7 @@ func TestRedirectPolicyAndAllowlistSafety(t *testing.T) {
 }
 
 func TestOversize(t *testing.T) {
-	p, _ := NewProxy(Config{})
+	p, _ := NewProxy(localConfig(nil))
 	s := httptest.NewServer(p.Handler())
 	defer s.Close()
 	resp := do(t, "POST", s.URL+"/proxy", strings.NewReader(strings.Repeat("x", maxControlBody+1)), map[string]string{"Content-Type": envelopeType})
